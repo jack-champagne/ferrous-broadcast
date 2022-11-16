@@ -11,13 +11,15 @@ use crate::{client, schema::Message};
 
 pub fn start_server() {
     let accept_socket = TcpListener::bind(("localhost", 50001)).expect("Could not bind!");
+    
     let (tx_msgs, rx_msgs) = mpsc::channel::<Message>();
     let (tx_conns, rx_conns) = mpsc::channel::<Arc<(TcpStream, SocketAddr)>>();
 
     std::thread::spawn(move || message_broadcaster(rx_msgs, rx_conns));
 
     loop {
-        let tx1 = tx_msgs.clone();
+        let new_client_tx = tx_msgs.clone();
+        
         let clientr1 = Arc::new(accept_socket.accept().expect("Connection error"));
         let clientr2 = clientr1.clone();
 
@@ -26,7 +28,7 @@ pub fn start_server() {
             Err(err) => println!("{}", err),
         }
 
-        std::thread::spawn(move || client::handle_client(tx1, clientr2));
+        std::thread::spawn(move || client::handle_client(new_client_tx, clientr2));
     }
 }
 
