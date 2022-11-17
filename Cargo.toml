@@ -1,6 +1,6 @@
 [package]
 name = "ferrous-irc"
-version = "0.2.0"
+version = "0.3.1"
 authors = [ "Jack Champagne" ]
 edition = "2021"
 
@@ -8,6 +8,7 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.x", features = ["full"] }
+clap = { version = "4.0.x", features = ["derive"] }
 
 [profile.release]
 debug = false
