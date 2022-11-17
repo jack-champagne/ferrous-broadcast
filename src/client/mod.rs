@@ -1,44 +1,53 @@
-use std::{
-    io::{self, BufRead, BufReader},
-    net::{SocketAddr, TcpStream},
-    sync::{mpsc::Sender, Arc},
+use std::net::SocketAddr;
+
+use tokio::{
+    io::{self, AsyncBufReadExt, BufReader},
+    net::tcp::OwnedReadHalf,
+    sync::mpsc::Sender,
 };
 
 use crate::schema::Message;
 
-pub fn handle_client(tx: Sender<Message>, client_arc: Arc<(TcpStream, SocketAddr)>) {
-    let (tcpstream, addr) = client_arc.as_ref();
-    let mut client_reader: BufReader<&TcpStream> = BufReader::new(tcpstream);
+pub async fn handle_client(broadcast: Sender<Message>, read_half: OwnedReadHalf, addr: SocketAddr) {
+    let mut buf = BufReader::new(read_half);
     loop {
-        let message_body = match get_message_body(&mut client_reader) {
+        let body = match get_message_body(&mut buf).await {
             Ok(msg) => msg,
-            Err(_) => break,
+            Err(err) => match err.kind() {
+                io::ErrorKind::BrokenPipe => break,
+                io::ErrorKind::InvalidData => continue,
+                _ => continue,
+            },
         };
 
-        let new_message = Message::new(*addr, message_body);
-        print!("{}", new_message.to_string());
+        let new_message = Message::new(addr, body);
+        print!("Recieved: {}", new_message.to_string());
 
-        match tx.send(new_message) {
-            Ok(_) => (),
-            Err(_) => continue,
-        }
+        match broadcast.send(new_message).await {
+            Ok(_) => continue,
+            Err(err) => broadcast
+                .blocking_send(err.0)
+                .expect("blocking send failed!"),
+        };
     }
     println!("Client {} disconnected", addr.to_string());
 }
 
-fn get_message_body(client_reader: &mut BufReader<&TcpStream>) -> Result<String, io::Error> {
+async fn get_message_body(
+    client_reader: &mut BufReader<OwnedReadHalf>,
+) -> Result<String, io::Error> {
     let mut buf = String::new();
-    match client_reader.read_line(&mut buf) {
-        Ok(bytes) => {
-            if bytes == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "Client connection terminated",
-                ));
-            }
-            buf = buf.trim_end().to_owned();
-            Ok(buf)
+    match client_reader.read_line(&mut buf).await {
+        Ok(0) => {
+            return Err(io::Error::from(io::ErrorKind::BrokenPipe));
+        }
+        Ok(_bytes) => {
+            let buf = buf.trim().to_owned();
+            match buf.len() {
+                0 => return Err(std::io::Error::from(io::ErrorKind::InvalidData)),
+                _ => return Ok(buf),
+            };
         }
         Err(err) => return Err(err),
-    }
+    };
 }

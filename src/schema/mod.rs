@@ -17,6 +17,6 @@ impl Message {
 
 impl ToString for Message {
     fn to_string(&self) -> String {
-        format!("{}: {}\n", self.from.to_string(), self.body)
+        format!("{}: {}\n\r", self.from.to_string(), self.body)
     }
 }

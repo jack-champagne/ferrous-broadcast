@@ -8,3 +8,6 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.x", features = ["full"] }
+
+[profile.release]
+debug = false

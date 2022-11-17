@@ -2,6 +2,7 @@ mod client;
 mod schema;
 mod server;
 
-fn main() {
-    server::start_server();
+#[tokio::main]
+async fn main() {
+    server::start_server(("localhost", 50001)).await;
 }
