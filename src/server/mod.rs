@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::{net::SocketAddr, thread, time::Duration};
 
 use tokio::{
@@ -7,13 +8,18 @@ use tokio::{
 
 use crate::{client, schema::Message};
 
-pub async fn start_server(addr: impl ToSocketAddrs) {
+pub async fn start_server<T>(addr: T)
+where
+    T: ToSocketAddrs + Debug,
+{
     let (broadcast_tx, broadcast_rx) = mpsc::channel::<Message>(1024);
     let (connections_tx, connections_rx) = mpsc::channel::<(OwnedWriteHalf, SocketAddr)>(64);
 
     std::thread::spawn(move || message_broadcaster(broadcast_rx, connections_rx));
 
-    let accept_listener = TcpListener::bind(addr).await.expect("Could not bind!");
+    let accept_listener = TcpListener::bind(&addr)
+        .await
+        .expect(&format!("Could not bind to {:?}", &addr));
     listen(broadcast_tx, accept_listener, connections_tx).await;
 }
 
