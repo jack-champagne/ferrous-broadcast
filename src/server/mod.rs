@@ -1,66 +1,67 @@
-use std::{
-    io::{BufWriter, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
-    sync::{
-        mpsc::{self, Receiver},
-        Arc,
-    },
+use std::{net::SocketAddr, thread, time::Duration};
+
+use tokio::{
+    net::{tcp::OwnedWriteHalf, TcpListener, ToSocketAddrs},
+    sync::mpsc::{self, Receiver, Sender},
 };
 
 use crate::{client, schema::Message};
 
-pub fn start_server() {
-    let accept_socket = TcpListener::bind(("localhost", 50001)).expect("Could not bind!");
-    
-    let (tx_msgs, rx_msgs) = mpsc::channel::<Message>();
-    let (tx_conns, rx_conns) = mpsc::channel::<Arc<(TcpStream, SocketAddr)>>();
+pub async fn start_server(addr: impl ToSocketAddrs) {
+    let (broadcast_tx, broadcast_rx) = mpsc::channel::<Message>(1024);
+    let (connections_tx, connections_rx) = mpsc::channel::<(OwnedWriteHalf, SocketAddr)>(64);
 
-    std::thread::spawn(move || message_broadcaster(rx_msgs, rx_conns));
+    std::thread::spawn(move || message_broadcaster(broadcast_rx, connections_rx));
 
+    let accept_listener = TcpListener::bind(addr).await.expect("Could not bind!");
+    listen(broadcast_tx, accept_listener, connections_tx).await;
+}
+
+async fn listen(
+    broadcast_tx: Sender<Message>,
+    accept_listener: TcpListener,
+    connections_tx: Sender<(OwnedWriteHalf, SocketAddr)>,
+) {
     loop {
-        let new_client_tx = tx_msgs.clone();
-        
-        let clientr1 = Arc::new(accept_socket.accept().expect("Connection error"));
-        let clientr2 = clientr1.clone();
+        let (new_stream, sock_addr) = accept_listener.accept().await.expect("Connection error");
+        let (readhalf, writehalf) = new_stream.into_split();
 
-        match tx_conns.send(clientr1) {
+        match connections_tx.send((writehalf, sock_addr.clone())).await {
             Ok(_) => (),
             Err(err) => println!("{}", err),
         }
 
-        std::thread::spawn(move || client::handle_client(new_client_tx, clientr2));
+        let new_client_tx = broadcast_tx.clone();
+        let client_handler = client::handle_client(new_client_tx, readhalf, sock_addr.clone());
+        tokio::spawn(async move { client_handler.await });
     }
 }
 
 fn message_broadcaster(
-    rx_msgs: Receiver<Message>,
-    rx_conns: Receiver<Arc<(TcpStream, SocketAddr)>>,
+    mut rx_msgs: Receiver<Message>,
+    mut rx_conns: Receiver<(OwnedWriteHalf, SocketAddr)>,
 ) {
-    let mut msg_conns: Vec<Arc<(TcpStream, SocketAddr)>> = Vec::new();
+    let mut msg_conns: Vec<OwnedWriteHalf> = Vec::new();
+    let dur = Duration::from_micros(1_000);
     loop {
         match rx_conns.try_recv() {
-            Ok(connection) => {
-                println!("Client {} connected", connection.1.to_string());
-                msg_conns.push(connection);
+            Ok((new_write_half, addr)) => {
+                println!("Client {} connected", addr.to_string());
+                msg_conns.push(new_write_half);
             }
             Err(_) => (),
         }
 
         match rx_msgs.try_recv() {
             Ok(new_message) => {
-                msg_conns.retain(|conn| {
-                    let (tcpstream, _addr) = conn.as_ref();
-                    !tcpstream.peer_addr().is_err()
-                });
+                msg_conns.retain(|conn| !conn.peer_addr().is_err());
                 for conn in &msg_conns {
-                    let (tcpstream, addr) = conn.as_ref();
-                    println!("{}", addr.to_string());
-                    let mut buf = BufWriter::new(tcpstream);
-                    buf.write(&new_message.to_string().as_bytes())
+                    conn.try_write(&new_message.to_string().as_bytes())
                         .expect("Could not write to socket");
                 }
             }
             Err(_) => (),
         };
+        thread::sleep(dur);
     }
 }
