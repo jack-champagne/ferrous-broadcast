@@ -4,7 +4,7 @@ mod server;
 
 use clap::Parser;
 
-/// Simple Async IRC server written in Rust
+/// Simple Async broadcasting TCP server written in Rust
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
